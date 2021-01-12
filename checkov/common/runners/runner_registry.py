@@ -1,10 +1,13 @@
 import json
 import logging
 from abc import abstractmethod
+# from xml import etree
+from lxml import etree
 
+from checkov.common.output.cyclonedx.generator import CycloneDxSbomGenerator
 from checkov.common.output.report import Report
 
-OUTPUT_CHOICES = ['cli', 'json', 'junitxml', 'github_failed_only']
+OUTPUT_CHOICES = ['cli', 'json', 'junitxml', 'github_failed_only', 'sbom']
 
 from checkov.common.bridgecrew.platform_integration import BcPlatformIntegration
 
@@ -42,6 +45,7 @@ class RunnerRegistry(object):
         exit_codes = []
         report_jsons = []
         junit_reports = []
+        sbom_reports = []
         for report in scan_reports:
             if not report.is_empty():
                 if args.output == "json":
@@ -51,6 +55,8 @@ class RunnerRegistry(object):
                     # report.print_junit_xml()
                 elif args.output == 'github_failed_only':
                     report.print_failed_github_md()
+                elif args.output == "sbom":
+                    sbom_reports.append(report)
                 else:
                     report.print_console(is_quiet=args.quiet)
             exit_codes.append(report.get_exit_code(args.soft_fail))
@@ -69,6 +75,9 @@ class RunnerRegistry(object):
                 print(json.dumps(report_jsons[0], indent=4))
             else:
                 print(json.dumps(report_jsons, indent=4))
+        if args.output == "sbom":
+            for report in sbom_reports:
+                print(CycloneDxSbomGenerator.sbom_to_string(CycloneDxSbomGenerator().create_and_return_sbom(report)).decode())
         if args.output == "cli":
             self.bc_platform.get_report_to_platform(args,scan_reports)
 
