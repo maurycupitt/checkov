@@ -40,8 +40,8 @@ class CycloneDxSbomGenerator():
     """create_and_return_sbom is responsible for taking results in
     CoordinateResults form and turning them into a valid CycloneDX SBOM"""
     sbom = self.__generator.create_xml_from_checkov(records)
-    # if not self.validate_sbom(sbom):
-    #   print("XML Validation Failed.")
+    if not self.validate_sbom(sbom):
+      print("XML Validation Failed.")
     return sbom
 
   @staticmethod
@@ -55,4 +55,4 @@ class CycloneDxSbomGenerator():
     valid = self.__generator.validate_xml(sbom)
     if valid:
       return sbom
-    raise ValueError("Something is wrong with the OSS Index results")
+    raise ValueError("The XML validation for the CycloneDX ouput has failed.")
