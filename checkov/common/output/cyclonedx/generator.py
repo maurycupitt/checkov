@@ -14,45 +14,112 @@
 # limitations under the License.
 #
 
-"""generator.py will craft and validate a CycloneDX SBOM"""
-# pylint: disable=protected-access
 import logging
+import json
+from collections import defaultdict
 
 from lxml import etree
 
-from ..cyclonedx.v1_1.generator import CycloneDx11Generator
+XMLNS = "http://cyclonedx.org/schema/bom/1.1"
+XMLNSV = "http://cyclonedx.org/schema/ext/vulnerability/1.0"
+
+NSMAP = {"v": XMLNSV}
+
+
+def code_line_string(code_block):
+  string_block = ''
+  last_line_number, _ = code_block[-1]
+
+  for (line_num, line) in code_block:
+    spaces = '    ' * (len(str(last_line_number)) - len(str(line_num)))
+    string_block += str(line_num) + ' | ' + spaces + line
+  return string_block
+
 
 class CycloneDxSbomGenerator():
-  """CycloneDxGenerator is responsible for taking identifiers
-  and vulnerabilities and turning them into a CycloneDX SBOM.
-  By default it will generate a 1.1 version of the SBOM, if sbom_version
-  is set to a different version (and an accompanying implementation is
-  done) it can create it. Currently only 1.1 is implemented, any other value
-  for sbom_version will throw a NotImplementedError"""
-  def __init__(self, sbom_version="1.1"):
-    self._log = logging.getLogger('checkov')
-    if sbom_version == "1.1":
-      self.__generator = CycloneDx11Generator()
-    else:
-      raise NotImplementedError
+    """CycloneDx11Generator is responsible for taking identifiers
+  and vulnerabilities and turning them into a CycloneDX 1.1 SBOM"""
 
-  def create_and_return_sbom(self, records) -> (list):
-    """create_and_return_sbom is responsible for taking results in
+    def __init__(self):
+        self._log = logging.getLogger('checkov')
+        self.__xml = []
+
+    def create_and_return_sbom(self, records) -> (list):
+        """create_and_return_sbom is responsible for taking results in
     CoordinateResults form and turning them into a valid CycloneDX SBOM"""
-    sbom = self.__generator.create_xml_from_checkov(records)
-    if not self.validate_sbom(sbom):
-      print("XML Validation Failed.")
-    return sbom
+        sbom = self.create_xml_from_checkov(records)
+        return sbom
 
-  @staticmethod
-  def sbom_to_string(sbom: etree.Element) -> (bytes):
-    """sbom_to_string is responsible for turning an sbom into a string"""
-    return etree.tostring(sbom, encoding="UTF-8")
+    @staticmethod
+    def sbom_to_string(sbom: etree.Element) -> (bytes):
+        """sbom_to_string is responsible for turning an sbom into a string"""
+        return etree.tostring(sbom, encoding="UTF-8")
 
-  def validate_sbom(self, sbom):
-    """validate_sbom is responsible for taking an sbom in etree Element
-     form and validating it against an internal CycloneDX XSD"""
-    valid = self.__generator.validate_xml(sbom)
-    if valid:
-      return sbom
-    raise ValueError("The XML validation for the CycloneDX ouput has failed.")
+    def create_xml_from_checkov(self, report: dict) -> (etree.Element):
+        self.__create_root()
+        components = etree.Element('components')
+        by_resource = defaultdict(list)
+        # Aggregate records by resource
+        for record in report.failed_checks:
+            by_resource[record.resource].append(record)
+
+        for resource, checks in by_resource.items():
+            purl_txt = "pkg:{0}/{1}@current".format(report.check_type, checks[0].resource)
+            component = etree.Element('component', {"type": "library", "bom-ref": purl_txt})
+            publisher = etree.SubElement(component, 'publisher')
+            publisher.text = 'checkov'
+            group = etree.SubElement(component, 'group')
+            group.text = checks[0].file_path
+            name = etree.SubElement(component, 'name')
+            name.text = resource
+            version = etree.SubElement(component, 'version')
+            version.text = "current"
+            purl = etree.SubElement(component, 'purl')
+            purl.text = purl_txt
+            # vulnerabilities
+            vulnerabilities = etree.Element("{%s}vulnerabilities" % XMLNSV, nsmap=NSMAP)
+            for check in checks:
+                vulnerability = etree.Element("{%s}vulnerability" % XMLNSV, {"ref": purl_txt})
+                # vulnerability = etree.Element("{%s}vulnerability" % XMLNSV)
+                _id = etree.SubElement(vulnerability, "{%s}id" % XMLNSV)
+                _id.text = check.check_id
+                source = etree.Element("{%s}source" % XMLNSV, {"name": "bridgecrew.io"})
+                url = etree.SubElement(source, "{%s}url" % XMLNSV)
+                url.text = check.guideline
+                vulnerability.append(source)
+                ratings = etree.Element("{%s}ratings" % XMLNSV)
+                rating = etree.SubElement(ratings, "{%s}rating" % XMLNSV)
+                score = etree.SubElement(rating, "{%s}score" % XMLNSV)
+                base = etree.SubElement(score, "{%s}base" % XMLNSV)
+                base.text = "9.0"
+                # vector = etree.SubElement(rating, "{%s}vector" % XMLNSV)
+                # vector.text = vuln.get_cvss_vector()
+                vulnerability.append(ratings)
+                description = etree.SubElement(vulnerability, "{%s}description" % XMLNSV)
+
+                desc_text = "### " + check.check_name + "\n\n" + \
+                            "* FAILED for Resource: `" + check.resource + "`\n" + \
+                            "* Check Class: `" + check.check_class + "`\n" + \
+                            "* File: `" + check.file_path + "`\n\n" + \
+                            "##### Code Block: \n\n" + \
+                            '``` ' + code_line_string(check.code_block) + ' ``` '
+
+                if check.evaluations is not None and len(check.evaluations) > 0:
+                    desc_text += " \n\n##### Evaluations: \n```\n" + (
+                        json.dumps(check.evaluations, sort_keys=False, indent=4, separators=(',', ': '))) + "\n```"
+
+                description.text = desc_text
+                if check.guideline is not None:
+                    advisories = etree.Element("{%s}advisories" % XMLNSV)
+                    advisory = etree.SubElement(advisories, "{%s}advisory" % XMLNSV)
+                    advisory.text = check.guideline
+                    vulnerability.append(advisories)
+
+                vulnerabilities.append(vulnerability)
+            component.append(vulnerabilities)
+            components.append(component)
+        self.__xml.append(components)
+        return self.__xml
+
+    def __create_root(self):
+        self.__xml = etree.Element('bom', {"xmlns": XMLNS, "version": "1"}, nsmap=NSMAP)
