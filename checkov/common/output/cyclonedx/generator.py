@@ -35,7 +35,6 @@ def code_line_string(code_block):
     string_block += str(line_num) + ' | ' + spaces + line
   return string_block
 
-
 class CycloneDxSbomGenerator():
     """CycloneDx11Generator is responsible for taking identifiers
   and vulnerabilities and turning them into a CycloneDX 1.1 SBOM"""
@@ -56,6 +55,7 @@ class CycloneDxSbomGenerator():
         return etree.tostring(sbom, encoding="UTF-8")
 
     def create_xml_from_checkov(self, report: dict) -> (etree.Element):
+        """create_xml_from_checkov is responsible for transforming checkov output to cylonedx"""
         self.__create_root()
         components = etree.Element('components')
         by_resource = defaultdict(list)
